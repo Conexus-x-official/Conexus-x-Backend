@@ -62,7 +62,8 @@ export type ChangeEntity =
     | "presence"
     | "conversation"
     | "message"
-    | "typing";
+    | "typing"
+    | "notification";
 
 export type ChangeAction = "created" | "updated" | "deleted" | "moved";
 
@@ -127,7 +128,13 @@ const SCOPE: Record<ChangeEntity, "module" | "workspace" | "conversation"> = {
     // Meet rides its own thread room; see the routing rules in emitChange.
     conversation: "conversation",
     message: "conversation",
-    typing: "conversation"
+    typing: "conversation",
+
+    // Unreachable in practice: a notification is always sent with an explicit
+    // `audience` (one person, not a room — see createNotification), and that
+    // path returns before this table is ever consulted. Still required so
+    // SCOPE stays a total map over ChangeEntity.
+    notification: "workspace"
 };
 
 /* ----------------------------------------------------------- the instance */

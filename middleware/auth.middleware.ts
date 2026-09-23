@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import User from "../models/User";
+import Pit from "../models/Pit";
 
 
 export interface AuthRequest extends Request {
@@ -46,8 +47,19 @@ export const protect = async (
 
         if (apiKey) {
 
+            const pit = await Pit.findOne({
+                token: apiKey,
+                isActive: true
+            }).select("user");
+
+            if (!pit) {
+                return res.status(401).json({
+                    message: "Invalid API key"
+                });
+            }
+
             const user = await User.findOne({
-                apiKey,
+                _id: pit.user,
                 isActive: true
             }).select("_id");
 

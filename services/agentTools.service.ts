@@ -148,7 +148,7 @@ const resolveTargetId = async (
     const exact = new RegExp(`^${escapeRegex(name)}$`, "i");
 
     if (kind === "workspace") {
-        const memberships = await WorkspaceMember.find({ user: context.userId })
+        const memberships = await WorkspaceMember.find({ user: context.userId, status: "active" })
             .populate("workspace", "name")
             .lean();
 
@@ -585,7 +585,7 @@ export async function executeTool(
     switch (name) {
 
         case "list_workspaces": {
-            const memberships = await WorkspaceMember.find({ user: userId })
+            const memberships = await WorkspaceMember.find({ user: userId, status: "active" })
                 .populate("workspace", "name")
                 .lean();
 

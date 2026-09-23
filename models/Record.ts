@@ -20,6 +20,8 @@ export interface IRecord extends Document {
   position: number;
   createdBy: mongoose.Types.ObjectId;
   isCompleted: boolean;
+  /** A per-record flag anyone with board access can toggle — "starred", email style. */
+  isImportant: boolean;
   isArchived: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -74,6 +76,11 @@ const RecordSchema = new Schema<IRecord>(
     },
 
     isCompleted: {
+      type: Boolean,
+      default: false,
+    },
+
+    isImportant: {
       type: Boolean,
       default: false,
     },

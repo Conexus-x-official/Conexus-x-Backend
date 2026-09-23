@@ -9,7 +9,11 @@ dotenv.config();
 
 // The TTL window lives inside the index, so it has to be reconciled with
 // ACTIVITY_RETENTION_DAYS on every boot — see models/Activity.ts.
-connectDB().then(() => syncActivityRetention());
+connectDB()
+    .then(() => syncActivityRetention())
+    // Not fatal any more: the per-request guard in app.ts retries, so a Mongo
+    // blip at boot no longer has to take the whole process down with it.
+    .catch((error) => console.error("MongoDB connect failed at boot:", error?.message));
 
 /**
  * Express no longer listens for itself. Socket.IO needs the raw HTTP server so

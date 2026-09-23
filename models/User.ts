@@ -98,7 +98,6 @@ export interface IUser extends Document {
   avatar?: string;
   avatarPublicId?: string;
   phone?: string;
-  apiKey?: string;
   googleId?: string;
   authProvider: "local" | "google";
 
@@ -252,13 +251,6 @@ const UserSchema = new Schema<IUser>(
     phone: {
       type: String,
       default: "",
-    },
-
-    apiKey: {
-      type: String,
-      unique: true,
-      sparse: true,
-      index: true,
     },
 
     emailVerified: {

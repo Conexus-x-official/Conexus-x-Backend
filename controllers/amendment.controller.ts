@@ -14,6 +14,9 @@ import { touchWorkspace } from "../utils/workspaceHelper";
 import { logActivity } from "../services/activity.service";
 import { runAutomations } from "../services/automation.service";
 import { emitChange, originOf } from "../services/realtime.service";
+import WorkspaceMember from "../models/WorkspaceMember";
+import { createNotification } from "../services/notification.service";
+import { extractMentionedUserIds } from "../services/mention.service";
 
 /**
  * Amendments: the conversation hanging off a single record.
@@ -77,7 +80,7 @@ export const getRecordAmendments = async (req: ModuleAccessRequest, res: Respons
 export const createAmendment = async (req: ModuleAccessRequest, res: Response) => {
     try {
         const { recordId } = req.params;
-        const { message, parentComment } = req.body ?? {};
+        const { message, parentComment, mentions } = req.body ?? {};
 
         const text = typeof message === "string" ? message.trim() : "";
 
@@ -154,6 +157,57 @@ export const createAmendment = async (req: ModuleAccessRequest, res: Response) =
                 user: req.user?.id as string,
                 after: text,
                 text
+            });
+        }
+
+        // @mentions notify regardless of reply depth — being mentioned in a
+        // reply is exactly as much "someone is talking to you" as in a root.
+        const author = amendment.user as unknown as {
+            firstName?: string;
+            lastName?: string;
+        } | null;
+        const authorName =
+            [author?.firstName, author?.lastName].filter(Boolean).join(" ").trim() ||
+            "Someone";
+
+        const mentionedIds = new Set(
+            await extractMentionedUserIds(String(record.workspace), text, String(req.user?.id))
+        );
+
+        /**
+         * EXPLICIT picks from the composer's @-autocomplete (components/
+         * RecordAmendmentsPanel.tsx GrowingTextarea) — an exact user id rather
+         * than a name matched against text. Still re-validated as an ACTIVE
+         * member of the record's workspace: `mentions` is client-supplied and
+         * a stale/forged id must not turn into a notification for someone
+         * with no reason to see this record.
+         */
+        const explicitIds = Array.isArray(mentions)
+            ? mentions
+                .filter((id: unknown): id is string => typeof id === "string" && mongoose.isValidObjectId(id))
+                .filter((id: string) => id !== String(req.user?.id))
+            : [];
+
+        if (explicitIds.length) {
+            const validMembers = await WorkspaceMember.find({
+                workspace: record.workspace,
+                user: { $in: explicitIds },
+                status: "active"
+            }).select("user").lean();
+
+            for (const row of validMembers) mentionedIds.add(String(row.user));
+        }
+
+        for (const mentionedUserId of mentionedIds) {
+            void createNotification({
+                user: mentionedUserId,
+                workspace: String(record.workspace),
+                module: String(record.module),
+                record: String(record._id),
+                type: "mention",
+                title: `${authorName} mentioned you`,
+                message: `On "${record.name}": ${text.length > 140 ? `${text.slice(0, 140)}…` : text}`,
+                metadata: { mentionedBy: authorName }
             });
         }
 

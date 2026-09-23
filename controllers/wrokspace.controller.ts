@@ -83,8 +83,12 @@ export const getWorkspaces = async (req: AuthRequest, res: Response) => {
 
         const pagination = parsePagination(req.query);
 
+        // A PENDING row is an invite the user has not accepted yet — it must
+        // not show up as a workspace they are already in. See the "pending"
+        // create in workspaceMember.controller.ts addWorkspaceMember.
         const membershipQuery = WorkspaceMember.find({
-            user: userId
+            user: userId,
+            status: "active"
         }).populate("workspace");
 
         if (pagination.enabled) {
