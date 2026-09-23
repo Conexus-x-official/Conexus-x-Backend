@@ -4,7 +4,9 @@ import {
     getWorkspaceMembers,
     addWorkspaceMember,
     updateWorkspaceMemberRole,
-    removeWorkspaceMember
+    removeWorkspaceMember,
+    acceptWorkspaceInvite,
+    declineWorkspaceInvite
 } from "../controllers/workspaceMember.controller";
 
 import { protect } from "../middleware/auth.middleware";
@@ -26,6 +28,22 @@ router.post(
     "/:workspaceId",
     protect,
     addWorkspaceMember
+);
+
+
+
+router.post(
+    "/:workspaceId/accept",
+    protect,
+    acceptWorkspaceInvite
+);
+
+
+
+router.post(
+    "/:workspaceId/decline",
+    protect,
+    declineWorkspaceInvite
 );
 
 

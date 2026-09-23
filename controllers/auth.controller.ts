@@ -3,7 +3,7 @@ import User, { ACCOUNT_TYPES, USER_STATUSES } from "../models/User";
 import { generateOtp, otpExpiry, sendOtpEmail } from "../services/otp.service";
 import { hashPassword, comparePassword } from "../utils/hash";
 import { createToken } from "../services/jwt.service";
-import { generateApiKey } from "../services/apiKey.service";
+import { ensureApiKey } from "../services/apiKey.service";
 import {
     buildGoogleAuthUrl,
     createOAuthState,
@@ -52,8 +52,6 @@ export const register = async (
 
 
 
-        const apiKey = generateApiKey();
-
         const otp = generateOtp();
 
         const user = await User.create({
@@ -61,10 +59,11 @@ export const register = async (
             lastName,
             email,
             password: hashedPassword,
-            apiKey,
             otpCode: otp,
             otpExpiresAt: otpExpiry()
         });
+
+        await ensureApiKey(user);
 
 
         /**
@@ -175,10 +174,7 @@ export const login = async (req: Request, res: Response) => {
         }
 
         // Ensure user has an API key
-        if (!user.apiKey) {
-            user.apiKey = generateApiKey();
-            await user.save();
-        }
+        await ensureApiKey(user);
 
         // Create JWT token
         const token = createToken(user._id.toString());
@@ -305,9 +301,10 @@ export const googleCallback = async (req: Request, res: Response) => {
                 authProvider: "google",
                 avatar: profile.picture || "",
                 emailVerified: Boolean(profile.email_verified),
-                apiKey: generateApiKey(),
                 lastLogin: new Date()
             });
+
+            await ensureApiKey(user);
 
             const mirrored = await mirrorGooglePicture(profile.picture, user._id.toString());
 
@@ -336,14 +333,12 @@ export const googleCallback = async (req: Request, res: Response) => {
                 }
             }
 
-            if (!user.apiKey) {
-                user.apiKey = generateApiKey();
-            }
-
             user.emailVerified = user.emailVerified || Boolean(profile.email_verified);
             user.lastLogin = new Date();
 
             await user.save();
+
+            await ensureApiKey(user);
 
         }
 

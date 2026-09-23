@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
+import connectDB from "./config/db";
 
 import { apiCacheHeaders } from "./middleware/cache.middleware";
 
@@ -21,6 +22,9 @@ import automationRoutes from "./routes/automation.routes";
 import amendmentRoutes from "./routes/amendment.routes";
 import conversationRoutes from "./routes/conversation.routes";
 import messageRoutes from "./routes/message.routes";
+import notificationRoutes from "./routes/notification.routes";
+import formRoutes from "./routes/form.routes";
+import publicFormRoutes from "./routes/publicForm.routes";
 
 const app = express();
 
@@ -33,6 +37,30 @@ app.use(cors());
 app.use(express.json());
 
 app.use("/api", apiCacheHeaders);
+
+/**
+ * Make sure the database is connected before any API route runs.
+ *
+ * On a persistent host server.ts has already connected and this is a cheap
+ * readyState check. On serverless, where server.ts is never executed, this is
+ * the ONLY thing that connects at all — without it every query buffers for ten
+ * seconds and then throws, which is what made Google sign-in report that it
+ * could not verify the account.
+ *
+ * A failure answers 503 with the reason instead of letting the request hang:
+ * "the database is unreachable" is a diagnosis, a timeout is a mystery.
+ */
+app.use("/api", async (_req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (error: any) {
+        console.error("Database unavailable:", error?.message);
+        res.status(503).json({
+            message: "The database is unavailable. Please try again shortly.",
+        });
+    }
+});
 
 
 /**
@@ -59,7 +87,22 @@ const DB_STATES: Record<number, string> = {
     3: "disconnecting",
 };
 
-app.get("/", (_req, res) => {
+app.get("/", async (_req, res) => {
+    /**
+     * Connect first, then report.
+     *
+     * The guard above only covers /api, so on a cold start this route would
+     * otherwise answer "disconnected" while the app was in fact perfectly able
+     * to serve the next request — which is precisely the false alarm that sent
+     * us hunting a database problem that did not exist. Awaiting here makes the
+     * answer true rather than merely fast.
+     */
+    try {
+        await connectDB();
+    } catch {
+        // Fall through: readyState below reports it, and the JSON says why.
+    }
+
     const state = mongoose.connection.readyState;
     const database = DB_STATES[state] ?? "unknown";
     const healthy = state === 1;
@@ -93,6 +136,10 @@ app.use("/api/uploads", uploadRoutes);
 app.use("/api/activity", activityRoutes);
 app.use("/api/automations", automationRoutes);
 app.use("/api/amendments", amendmentRoutes);
+app.use("/api/notifications", notificationRoutes);
+app.use("/api/forms", formRoutes);
+// No `protect` inside — this is the public, shareable form surface.
+app.use("/api/public/forms", publicFormRoutes);
 
 // Conexus Meet
 app.use("/api/conversations", conversationRoutes);

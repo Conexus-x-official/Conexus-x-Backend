@@ -1,7 +1,12 @@
 import { Response } from "express";
 import { AuthRequest } from "../middleware/auth.middleware";
 import User from "../models/User";
-import { generateApiKey } from "../services/apiKey.service";
+import Pit from "../models/Pit";
+import { generateApiKey, ensureApiKey, nextAllowedAt } from "../services/apiKey.service";
+
+
+const displayName = (user: { firstName: string; lastName?: string }) =>
+    [user.firstName, user.lastName].filter(Boolean).join(" ").trim();
 
 
 // GET /api/api-key — return the current user's API key (generate if not present)
@@ -12,7 +17,7 @@ export const getApiKey = async (
 
     try {
 
-        let user = await User.findById(req.user?.id);
+        const user = await User.findById(req.user?.id).select("firstName lastName");
 
         if (!user) {
             return res.status(404).json({
@@ -20,13 +25,13 @@ export const getApiKey = async (
             });
         }
 
-        if (!user.apiKey) {
-            user.apiKey = generateApiKey();
-            await user.save();
-        }
+        await ensureApiKey(user);
+
+        const pit = await Pit.findOne({ user: user._id });
 
         res.json({
-            apiKey: user.apiKey
+            apiKey: pit!.token,
+            nextAllowedAt: nextAllowedAt(pit!.lastGeneratedAt).toISOString()
         });
 
     } catch (error: any) {
@@ -48,13 +53,7 @@ export const generateKey = async (
 
     try {
 
-        const apiKey = generateApiKey();
-
-        const user = await User.findByIdAndUpdate(
-            req.user?.id,
-            { apiKey },
-            { returnDocument: "after" }
-        ).select("apiKey");
+        const user = await User.findById(req.user?.id).select("firstName lastName");
 
         if (!user) {
             return res.status(404).json({
@@ -62,9 +61,34 @@ export const generateKey = async (
             });
         }
 
+        const existing = await Pit.findOne({ user: user._id });
+
+        if (existing) {
+
+            const allowedAt = nextAllowedAt(existing.lastGeneratedAt);
+
+            if (allowedAt.getTime() > Date.now()) {
+                return res.status(429).json({
+                    message: "You can only change your PIT key once every 20 minutes",
+                    nextAllowedAt: allowedAt.toISOString()
+                });
+            }
+
+        }
+
+        const token = generateApiKey();
+        const generatedAt = new Date();
+
+        const pit = await Pit.findOneAndUpdate(
+            { user: user._id },
+            { token, name: displayName(user), isActive: true, lastGeneratedAt: generatedAt },
+            { upsert: true, returnDocument: "after" }
+        );
+
         res.json({
-            message: "API key updated",
-            apiKey: user.apiKey
+            message: "PIT key updated",
+            apiKey: pit!.token,
+            nextAllowedAt: nextAllowedAt(generatedAt).toISOString()
         });
 
     } catch (error: any) {
@@ -76,4 +100,3 @@ export const generateKey = async (
     }
 
 };
-

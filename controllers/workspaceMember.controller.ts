@@ -1,12 +1,15 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import WorkspaceMember, { MEMBER_ROLES, MemberRole } from "../models/WorkspaceMember";
+import Workspace from "../models/Workspace";
+import Notification from "../models/Notification";
 import User, { UserStatus } from "../models/User";
 import { touchWorkspace } from "../utils/workspaceHelper";
 import { logActivity } from "../services/activity.service";
 import { emitChange, originOf } from "../services/realtime.service";
 import { effectiveStatus } from "../services/presence.service";
 import { paginationMeta, parsePagination } from "../utils/pagination";
+import { createNotification } from "../services/notification.service";
 
 interface AuthRequest extends Request {
     user?: {
@@ -167,6 +170,14 @@ export const addWorkspaceMember = async (
 
 
 
+        /**
+         * PENDING, not active: this is an invite, and the person has not agreed
+         * to anything yet. They become an active member only through
+         * acceptWorkspaceInvite below, triggered from their notification —
+         * every membership check in the app already gates on status "active"
+         * (getMembership, resolveModuleAccess, the socket subscribe handler),
+         * so a pending row grants no access on its own.
+         */
         const member = await WorkspaceMember.create({
 
             workspace: new mongoose.Types.ObjectId(workspaceId as string),
@@ -174,6 +185,8 @@ export const addWorkspaceMember = async (
             user: user._id,
 
             role: role || "member",
+
+            status: "pending",
 
             invitedBy: req.user?.id ? new mongoose.Types.ObjectId(req.user.id) : undefined
 
@@ -190,8 +203,31 @@ export const addWorkspaceMember = async (
             action: "member_invited",
             targetName: memberLabel,
             after: member.role,
-            message: `added ${memberLabel} as ${member.role}`,
+            message: `invited ${memberLabel} as ${member.role}`,
             metadata: { memberUserId: String(user._id), role: member.role }
+        });
+
+        const [workspace, inviter] = await Promise.all([
+            Workspace.findById(workspaceId).select("name icon"),
+            req.user?.id ? User.findById(req.user.id).select("firstName lastName") : null
+        ]);
+
+        const inviterLabel =
+            `${inviter?.firstName ?? ""} ${inviter?.lastName ?? ""}`.trim() || "Someone";
+        const workspaceName = workspace?.name ?? "a workspace";
+
+        void createNotification({
+            user: String(user._id),
+            workspace: String(workspaceId),
+            type: "invite",
+            title: "Workspace invitation",
+            message: `${inviterLabel} invited you to join "${workspaceName}" as ${member.role}`,
+            metadata: {
+                workspaceName,
+                workspaceIcon: workspace?.icon ?? "",
+                role: member.role,
+                invitedBy: inviterLabel
+            }
         });
 
         // Populated so the client can name the person it just added without a
@@ -210,7 +246,7 @@ export const addWorkspaceMember = async (
 
         return res.status(201).json({
 
-            message: "Member added successfully",
+            message: "Invitation sent",
 
             member
 
@@ -436,6 +472,185 @@ export const updateWorkspaceMemberRole = async (
     } catch (error: any) {
 
         console.error("Update member role error:", error.message);
+
+        return res.status(500).json({ message: "Server error" });
+
+    }
+
+};
+
+
+/**
+ * POST /api/workspace-members/:workspaceId/accept
+ *
+ * The other half of addWorkspaceMember's pending row: the invited user, and
+ * only the invited user (req.user.id, never a body/param), turns their own
+ * pending row active. This is the ONLY place a WorkspaceMember goes
+ * pending -> active — see the comment on the pending create above for why
+ * every access check in the app already treats that as "not really a member
+ * yet".
+ */
+export const acceptWorkspaceInvite = async (
+    req: AuthRequest,
+    res: Response
+) => {
+
+    try {
+
+        const { workspaceId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(String(workspaceId))) {
+            return res.status(400).json({ message: "Invalid workspace ID format" });
+        }
+
+        const member = await WorkspaceMember.findOne({
+            workspace: workspaceId,
+            user: req.user?.id,
+            status: "pending"
+        });
+
+        if (!member) {
+            return res.status(404).json({ message: "No pending invitation found" });
+        }
+
+        member.status = "active";
+        member.joinedAt = new Date();
+        await member.save();
+
+        await member.populate("user", "firstName lastName email avatar");
+
+        await touchWorkspace(String(workspaceId));
+
+        const memberUser = member.user as unknown as {
+            firstName?: string;
+            lastName?: string;
+            email?: string;
+        } | null;
+
+        const memberLabel =
+            `${memberUser?.firstName ?? ""} ${memberUser?.lastName ?? ""}`.trim() ||
+            memberUser?.email ||
+            "a member";
+
+        await logActivity({
+            workspace: String(workspaceId),
+            user: req.user?.id,
+            action: "member_joined",
+            targetName: memberLabel,
+            after: member.role,
+            message: `${memberLabel} joined the workspace`
+        });
+
+        // The invite is resolved — nothing left for it to ask.
+        await Notification.deleteMany({
+            user: req.user?.id,
+            workspace: workspaceId,
+            type: "invite"
+        });
+
+        emitChange({
+            entity: "member",
+            action: "updated",
+            id: String(member._id),
+            workspaceId: String(workspaceId),
+            data: member,
+            actorId: req.user?.id,
+            originId: originOf(req)
+        });
+
+        // The accepting user's OWN other tabs/devices are not in the workspace
+        // room yet (they only just joined) — audience delivery reaches them
+        // directly so both their member list AND their "my workspaces" list
+        // (a separate tag from a separate query) pick the new one up.
+        emitChange({
+            entity: "member",
+            action: "updated",
+            id: String(member._id),
+            workspaceId: String(workspaceId),
+            audience: [String(req.user?.id)]
+        });
+
+        emitChange({
+            entity: "workspace",
+            action: "updated",
+            id: String(workspaceId),
+            audience: [String(req.user?.id)]
+        });
+
+        return res.json({ message: "Joined workspace", member });
+
+    } catch (error: any) {
+
+        console.error("Accept invite error:", error.message);
+
+        return res.status(500).json({ message: "Server error" });
+
+    }
+
+};
+
+
+/**
+ * POST /api/workspace-members/:workspaceId/decline
+ *
+ * Removes the pending row outright rather than marking it "inactive" — an
+ * "inactive" status elsewhere in this model means someone who WAS active and
+ * left or was removed, which is a different fact than "never joined".
+ */
+export const declineWorkspaceInvite = async (
+    req: AuthRequest,
+    res: Response
+) => {
+
+    try {
+
+        const { workspaceId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(String(workspaceId))) {
+            return res.status(400).json({ message: "Invalid workspace ID format" });
+        }
+
+        const member = await WorkspaceMember.findOneAndDelete({
+            workspace: workspaceId,
+            user: req.user?.id,
+            status: "pending"
+        });
+
+        if (!member) {
+            return res.status(404).json({ message: "No pending invitation found" });
+        }
+
+        await touchWorkspace(String(workspaceId));
+
+        await logActivity({
+            workspace: String(workspaceId),
+            user: req.user?.id,
+            action: "member_invite_declined",
+            before: member.role,
+            after: null,
+            message: "declined an invitation to join the workspace"
+        });
+
+        await Notification.deleteMany({
+            user: req.user?.id,
+            workspace: workspaceId,
+            type: "invite"
+        });
+
+        emitChange({
+            entity: "member",
+            action: "deleted",
+            id: String(member._id),
+            workspaceId: String(workspaceId),
+            actorId: req.user?.id,
+            originId: originOf(req)
+        });
+
+        return res.json({ message: "Invitation declined" });
+
+    } catch (error: any) {
+
+        console.error("Decline invite error:", error.message);
 
         return res.status(500).json({ message: "Server error" });
 

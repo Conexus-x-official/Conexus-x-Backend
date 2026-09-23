@@ -14,6 +14,8 @@ export const ACTIVITY_ACTIONS = [
   "workspace_updated",
   "workspace_deleted",
   "member_invited",
+  "member_joined",
+  "member_invite_declined",
   "member_removed",
   "member_role_changed",
   "module_access_changed",

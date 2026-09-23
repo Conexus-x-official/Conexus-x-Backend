@@ -12,6 +12,7 @@ import Automation from "../models/Automation";
 // The Comment model backs amendments — see amendment.controller.ts for why the
 // storage keeps its original name.
 import Comment from "../models/Comment";
+import Form from "../models/Form";
 import WorkspaceMember from "../models/WorkspaceMember";
 
 /**
@@ -65,6 +66,7 @@ export const moduleFrom = {
     recordParam: fromModel(Record, "recordId"),
     recordValueParam: fromModel(RecordValue, "recordValueId"),
     amendmentParam: fromModel(Comment, "amendmentId"),
+    formParam: fromModel(Form, "formId"),
     recordBody: fromRecordBody
 };
 

@@ -26,6 +26,14 @@ export interface INotification extends Document {
 
   readAt?: Date;
 
+  /**
+   * Type-specific extras the feed needs to render without a follow-up lookup —
+   * an invite's role/inviter name, a mention's snippet author. Free-form like
+   * Activity.metadata, for the same reason: every type would otherwise want
+   * its own optional columns.
+   */
+  metadata?: Record<string, unknown>;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -90,6 +98,11 @@ const NotificationSchema = new Schema<INotification>(
     readAt: {
       type: Date,
       default: null,
+    },
+
+    metadata: {
+      type: Schema.Types.Mixed,
+      default: {},
     },
   },
   {
